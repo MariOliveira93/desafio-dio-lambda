@@ -1,0 +1,179 @@
+> Baixar Localstack: https://docs.localstack.cloud/getting-started/installation/
+> Opção - Localstack Desktop: https://docs.localstack.cloud/user-guide/tools/localstack-desktop/
+
+Após instalação, validar: localstack --version
+Devera exibir a versão instalada
+
+Se você estiver usando Docker, execute o Localstack com o comando abaixo:
+	docker run -d --name localstack -p 4566:4566 -p 4571:4571 -e SERVICES=ALL -e DEBUG=1 -v /var/run/docker.sock:/var/run/docker.sock localstack/localstack
+
+Se instalou com LocalStack CLI, você pode atualizar ou validar as informações:
+Entendido! Para atualizar apenas o **Localstack CLI** instalado no seu sistema via **PowerShell**, siga os passos abaixo:
+
+> Instale novamente a versão mais recente via PIP
+
+	pip install localstack
+
+
+> Verifique a instalação
+
+	Após a instalação, verifique se a atualização foi concluída corretamente:
+	localstack --version
+
+> Teste o CLI
+
+	Com o Localstack CLI atualizado, você pode tentar o comando novamente:
+	localstack update all
+
+Para iniciar: 
+	localstack start
+
+Depois de iniciado, o Localstack estará disponível no endereço http://localhost:4566. Use o comando a seguir para verificar o status:
+	Invoke-RestMethod -Uri "http://localhost:4566/_localstack/health"
+
+
+
+
+> Configurar o AWS CLI local 
+
+Digite no prompt: aws configure
+
+environment:
+	$env:AWS_ACCESS_KEY_ID="test"
+	$env:AWS_SECRET_ACCESS_KEY="test"
+	$env:AWS_DEFAULT_REGION="us-east-1"
+	$env:AWS_DEFAULT_OUTPUT=json
+
+# Atenção: as credenciais NÃO PRECISAM SER VÁLIDAS, mas devem ser definidas!
+
+################################################################################
+ HANDS ON
+################################################################################
+
+Tarefas para Configuração:
+	1) Criar o bucket S3: Configure um bucket chamado notas-fiscais-upload
+	2) Criar a tabela no DynamoDB: Nome NotasFiscais, com chave primária id.
+	3) Criar uma Lambda Function: Configure as permissões para acesso ao S3 e DynamoDB.
+	4) Criar o trigger do S3: Configure o bucket para disparar a Lambda ao fazer upload de arquivos	
+
+
+Criar a função Lambda:
+	aws lambda create-function --function-name ProcessarNotasFiscais --runtime python3.9 --role arn:aws:iam::000000000000:role/lambda-role --handler grava_db.lambda_handler --zip-file fileb://lambda_function.zip --endpoint-url=http://localhost:4566
+
+Verificar se a função Lambda foi criada:
+	aws lambda list-functions --endpoint-url=http://localhost:4566
+ 
+Criar o bucket S3:
+	awslocal s3api create-bucket --bucket notas-fiscais-upload
+
+Conceder permissão ao S3 para invocar a função Lambda:
+	aws lambda add-permission --function-name ProcessarNotasFiscais --statement-id s3-trigger-permission --action "lambda:InvokeFunction" --principal s3.amazonaws.com --source-arn "arn:aws:s3:::notas-fiscais-upload" --endpoint-url=http://localhost:4566
+
+Configurar a notificação no bucket S3 - Role:
+	aws s3api put-bucket-notification-configuration --bucket notas-fiscais-upload --notification-configuration file://notification_roles.json --endpoint-url=http://localhost:4566
+
+Validar a notificação no bucket S3 - Role:
+aws s3api get-bucket-notification-configuration --bucket <nome-do-bucket> --endpoint-url=http://localhost:4566
+
+aws s3api get-bucket-notification-configuration --bucket notas-fiscais-upload --endpoint-url=http://localhost:4566
+
+
+
+DynamoDB - criar a tabela NotasFiscais:
+		aws dynamodb create-table --endpoint-url=http://localhost:4566 --table-name NotasFiscais --attribute-definitions AttributeName=id,AttributeType=S --key-schema AttributeName=id,KeyType=HASH --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+		
+	Verificar tabela:
+		aws dynamodb list-tables --endpoint-url=http://localhost:4566
+
+
+> Download NoSQL Workbench for DynamoDB, para fazer querys ou outro a sua escolha	
+	
+	https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/workbench.settingup.html
+	
+	
+Script para gerar o arquivo notas_fiscais.json:
+	Para executar: python gerar_dados.py - ira gerar um arquivo fake para usarmos no projeto
+
+Enviar arquivo para teste:
+	aws s3 cp notas_fiscais_2025.json s3://notas-fiscais-upload --endpoint-url=http://localhost:4566
+
+> Crie a API no API Gateway
+	aws apigateway create-rest-api --name "NotasFiscaisAPI" --endpoint-url=http://localhost:4566
+
+
+A resposta será semelhante a esta:
+{
+    "id": "abc123",
+    "name": "NotasFiscaisAPI"
+}
+Obtenha o ID do recurso raiz:
+	aws apigateway get-resources --rest-api-id u0sk7fep5o --endpoint-url=http://localhost:4566
+
+A saída será semelhante a esta: O ID do recurso raiz é xyz456.
+
+{
+    "items": [
+        {
+            "id": "xyz456",
+            "path": "/"
+        }
+    ]
+}
+
+Crie o recurso /notas na API:
+	aws apigateway create-resource --rest-api-id u0sk7fep5o --parent-id onkhdnhrhl --path-part "notas" --endpoint-url=http://localhost:4566
+
+A saída será semelhante a:O ID do recurso é mno789.
+{
+    "id": "mno789",
+    "path": "/notas"
+}
+
+Configure o método HTTP (POST ou GET): o recurso /notas, vinculando-o à sua função Lambda:
+	aws apigateway put-method --rest-api-id u0sk7fep5o --resource-id mhmc5ukc8z --http-method POST --authorization-type "NONE" --endpoint-url=http://localhost:4566
+	aws apigateway put-method --rest-api-id u0sk7fep5o --resource-id mhmc5ukc8z --http-method GET --authorization-type "NONE" --endpoint-url=http://localhost:4566
+
+
+Integre o método com a Lambda
+	aws apigateway put-integration --rest-api-id u0sk7fep5o --resource-id mhmc5ukc8z --http-method POST --type AWS_PROXY --integration-http-method POST --uri "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:000000000000:function:ProcessarNotasFiscais/invocations" --endpoint-url=http://localhost:4566
+	aws apigateway put-integration --rest-api-id u0sk7fep5o --resource-id mhmc5ukc8z --http-method GET --type AWS_PROXY --integration-http-method POST --uri "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:000000000000:function:ProcessarNotasFiscais/invocations" --endpoint-url=http://localhost:4566
+
+
+Conceder permissão à API para invocar a Lambda
+	aws lambda add-permission --function-name ProcessarNotasFiscais --statement-id apigateway-access --action "lambda:InvokeFunction" --principal apigateway.amazonaws.com --source-arn "arn:aws:execute-api:us-east-1:000000000000:u0sk7fep5o/*/POST/notas" --endpoint-url=http://localhost:4566
+
+Implemente a API 
+	aws apigateway create-deployment --rest-api-id u0sk7fep5o --stage-name dev --endpoint-url=http://localhost:4566	
+
+
+Teste a API:
+Invoke-RestMethod -Uri "http://localhost:4566/restapis/u0sk7fep5o/dev/_user_request_/notas" `
+                  -Method POST `
+                  -ContentType "application/json" `
+                  -Body '{"id": "NF-999", "cliente": "João2 Silva", "valor": 1000.0, "data_emissao": "2025-01-31"}'
+
+Usar Python para enviar a requisição
+
+aws apigateway get-integration --rest-api-id u0sk7fep5o --resource-id mhmc5ukc8z --http-method POST --endpoint-url=http://localhost:4566
+ 
+ 
+ 
+
+Resumo:
+Empacote o código em .zip.
+Crie a função Lambda no Localstack.
+Configure o bucket S3 para disparar a Lambda.
+Envie um arquivo para o S3.
+Verifique os logs e os dados inseridos no DynamoDB.
+Role ficticia: arn:aws:iam::000000000000:role/lambda-role
+
+
+
+
+
+
+
+
+
+
+
